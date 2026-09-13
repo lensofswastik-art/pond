@@ -8,6 +8,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { createRectCache } from "../rect-cache";
+
 export interface LotusOptions {
   /** URLs of the lotus leaf images to scatter across the surface. */
   sources?: string[];
@@ -49,8 +51,8 @@ export interface LotusInstance {
 
 const DEFAULTS: Required<LotusOptions> = {
   sources: ["/leaf%201.png", "/leaf%202.png"],
-  count: 6,
-  scale: 0.1,
+  count: 8,
+  scale: 0.08,
   pushStrength: 1,
   pushRadius: 200,
   stiffness: 55,
@@ -557,8 +559,10 @@ export function createLotus(
   wake = start;
   start();
 
+  const rectCache = createRectCache(output);
+
   function localPoint(event: PointerEvent): [number, number] {
-    const rect = output.getBoundingClientRect();
+    const rect = rectCache.current;
     return [event.clientX - rect.left, event.clientY - rect.top];
   }
 
@@ -620,6 +624,7 @@ export function createLotus(
     destroy() {
       destroyed = true;
       cancelAnimationFrame(raf);
+      rectCache.destroy();
       leafImages.forEach((img) => {
         img.onload = null;
       });

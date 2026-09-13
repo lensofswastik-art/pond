@@ -8,13 +8,13 @@ import {
   type ReactNode,
 } from "react";
 
+import { createRectCache } from "../rect-cache";
+
 export interface FlowersOptions {
   /** URL of the flower image to scatter across the surface. */
   src?: string;
   /** How many flowers float on the surface (1 to 16). */
   count?: number;
-  /** How fast flowers ambiently drift. 1 is normal, lower is slower. */
-  speed?: number;
   /** Size of each flower as a fraction of the shorter viewport side (0 to 1). */
   scale?: number;
   /** How strongly a touch pushes nearby flowers away. */
@@ -47,9 +47,8 @@ export interface FlowersInstance {
 
 const DEFAULTS: Required<FlowersOptions> = {
   src: "/flower.png",
-  count: 8,
-  speed: 0.3,
-  scale: 0.05,
+  count: 10,
+  scale: 0.04,
   pushStrength: 1,
   pushRadius: 220,
   shadow: 0.45,
@@ -165,10 +164,6 @@ interface Flower {
   vy: number;
   angle: number;
   angularVelocity: number;
-  driftPhaseX: number;
-  driftPhaseY: number;
-  driftFreqX: number;
-  driftFreqY: number;
   size: number;
 }
 
@@ -181,11 +176,7 @@ function makeFlowers(count: number, width: number, height: number): Flower[] {
       vx: 0,
       vy: 0,
       angle: Math.random() * Math.PI * 2,
-      angularVelocity: (Math.random() - 0.5) * 0.15,
-      driftPhaseX: Math.random() * Math.PI * 2,
-      driftPhaseY: Math.random() * Math.PI * 2,
-      driftFreqX: 0.06 + Math.random() * 0.06,
-      driftFreqY: 0.05 + Math.random() * 0.06,
+      angularVelocity: 0,
       size: 0.7 + Math.random() * 0.6,
     });
   }
@@ -384,28 +375,17 @@ export function createFlowers(
     );
   }
 
-  const DRIFT_ACCEL = 22;
-  const DAMPING = 0.985;
-  const ANGULAR_DAMPING = 0.99;
+  const DAMPING = 0.94;
+  const ANGULAR_DAMPING = 0.94;
   const MARGIN = 0.08;
+  const REST_SPEED_SQ = 0.05;
 
-  function step(delta: number, elapsed: number) {
+  function step(delta: number): boolean {
     const w = Math.max(output.clientWidth, 1);
     const h = Math.max(output.clientHeight, 1);
-    const speed = Math.max(config.speed, 0);
+    let moving = false;
 
     for (const flower of flowers) {
-      const driftX =
-        Math.sin(elapsed * flower.driftFreqX * speed + flower.driftPhaseX) *
-        DRIFT_ACCEL *
-        speed;
-      const driftY =
-        Math.cos(elapsed * flower.driftFreqY * speed + flower.driftPhaseY) *
-        DRIFT_ACCEL *
-        speed;
-
-      flower.vx += driftX * delta;
-      flower.vy += driftY * delta;
       flower.vx *= DAMPING;
       flower.vy *= DAMPING;
       flower.angularVelocity *= ANGULAR_DAMPING;
@@ -432,7 +412,15 @@ export function createFlowers(
         flower.y = maxY;
         flower.vy = -Math.abs(flower.vy) * 0.4;
       }
+
+      if (
+        flower.vx * flower.vx + flower.vy * flower.vy > REST_SPEED_SQ ||
+        Math.abs(flower.angularVelocity) > 0.01
+      ) {
+        moving = true;
+      }
     }
+    return moving;
   }
 
   function render(elapsed: number) {
@@ -514,8 +502,12 @@ export function createFlowers(
       running = false;
       return;
     }
-    step(delta, elapsed);
+    const moving = step(delta);
     render(elapsed);
+    if (!moving) {
+      running = false;
+      return;
+    }
     raf = requestAnimationFrame(frame);
   }
 
@@ -529,8 +521,10 @@ export function createFlowers(
   wake = start;
   start();
 
+  const rectCache = createRectCache(output);
+
   function localPoint(event: PointerEvent): [number, number] {
-    const rect = output.getBoundingClientRect();
+    const rect = rectCache.current;
     return [event.clientX - rect.left, event.clientY - rect.top];
   }
 
@@ -594,6 +588,7 @@ export function createFlowers(
     destroy() {
       destroyed = true;
       cancelAnimationFrame(raf);
+      rectCache.destroy();
       flowerImage.onload = null;
       content.removeEventListener("pointerdown", onPointerDown);
       observer.disconnect();

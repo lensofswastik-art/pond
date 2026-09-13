@@ -10,32 +10,24 @@ import {
 
 import { createRectCache } from "../rect-cache";
 
-export type RippleTrigger = "click" | "hover" | "none";
-
-export interface RippleOptions {
-  /** Height of the waves (0 to 3). */
-  amplitude?: number;
-  /** How fast the rings travel outward. 1 is normal speed. */
+export interface FishOptions {
+  /** URL of the fish image, oriented head-up (nose at top of the image). */
+  src?: string;
+  /** How many fish swim in the pond (1 to 6). */
+  count?: number;
+  /** Size of each fish as a fraction of the shorter viewport side (0 to 1). */
+  scale?: number;
+  /** How fast fish swim along their orbit. 1 is normal. */
   speed?: number;
-  /** Distance between wave crests in CSS pixels. */
-  wavelength?: number;
-  /** Number of crests in each wave train (1 to 8). */
-  rings?: number;
-  /** How quickly the waves lose energy (higher dies faster). */
-  decay?: number;
-  /** How strongly the waves bend the page content, in CSS pixels. */
-  refraction?: number;
-  /** Chromatic dispersion splitting colors along the wave slopes (0 to 1). */
-  dispersion?: number;
-  /** Intensity of the light glints on the wave crests (0 to 2). */
-  shine?: number;
-  /** What spawns ripples. "click" on press, "hover" also leaves a wake while moving, "none" only ambient. */
-  trigger?: RippleTrigger;
-  /** Seconds between ambient ripples at random positions. 0 disables them. */
-  interval?: number;
+  /** How strongly the body pulses in size while swimming (0 to 1). */
+  flex?: number;
+  /** How strongly a touch deflects nearby fish off their path. */
+  pushStrength?: number;
+  /** Radius in CSS pixels within which a touch affects fish. */
+  pushRadius?: number;
 }
 
-export interface RippleElements {
+export interface FishElements {
   /** Canvas with layoutsubtree that hosts the HTML content. */
   source: HTMLCanvasElement;
   /** The element inside the source canvas that gets captured. */
@@ -44,32 +36,28 @@ export interface RippleElements {
   output: HTMLCanvasElement;
 }
 
-export interface RippleInstance {
+export interface FishInstance {
   /** Update effect options live. */
-  setOptions: (options: RippleOptions) => void;
-  /** Spawn a ripple at a position in CSS pixels relative to the element. */
-  splash: (x: number, y: number, strength?: number) => void;
+  setOptions: (options: FishOptions) => void;
+  /** Deflect fish away from a point in CSS pixels relative to the element. */
+  push: (x: number, y: number, strength?: number) => void;
   /** Re-read canvas size. Call when the element is resized. */
   resize: () => void;
   /** Stop the loop and release all GPU resources. */
   destroy: () => void;
 }
 
-const DEFAULTS: Required<RippleOptions> = {
-  amplitude: 0.5,
-  speed: 0.65,
-  wavelength: 80,
-  rings: 2,
-  decay: 1,
-  refraction: 100,
-  dispersion: 0.5,
-  shine: 0.5,
-  trigger: "click",
-  interval: 0,
+const DEFAULTS: Required<FishOptions> = {
+  src: "/fish.svg",
+  count: 4,
+  scale: 0.06,
+  speed: 0.35,
+  flex: 0.12,
+  pushStrength: 1,
+  pushRadius: 180,
 };
 
-const MAX_RIPPLES = 12;
-const BASE_SPEED = 340;
+const MAX_FISH = 6;
 
 type PaintableCanvas = HTMLCanvasElement & {
   onpaint?: (() => void) | null;
@@ -94,16 +82,11 @@ precision highp float;
 in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uContent;
+uniform sampler2D uFish;
 uniform vec2 uResolution;
-uniform vec4 uRipples[12];
+uniform vec4 uFish0[6];
+uniform float uRotation[6];
 uniform int uCount;
-uniform float uSpeed;
-uniform float uWavelength;
-uniform float uWidth;
-uniform float uDecay;
-uniform float uRefraction;
-uniform float uDispersion;
-uniform float uShine;
 uniform float uHasContent;
 uniform float uMaxX;
 
@@ -113,53 +96,48 @@ vec4 page (vec2 p) {
   return texture(uContent, p);
 }
 
+vec4 sampleFish (vec2 frag, vec2 center, float half_, float rotation, out float alpha) {
+  float c = cos(rotation);
+  float s = sin(rotation);
+  vec2 d = frag - center;
+  vec2 local = vec2(d.x * c + d.y * s, -d.x * s + d.y * c);
+  vec2 uv = local / (half_ * 2.0) + 0.5;
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
+    alpha = 0.0;
+    return vec4(0.0);
+  }
+  vec4 tex = texture(uFish, uv);
+  alpha = tex.a;
+  return tex;
+}
+
 void main () {
   vec2 pUv = vec2(vUv.x, 1.0 - vUv.y);
   vec2 frag = pUv * uResolution;
 
-  vec2 grad = vec2(0.0);
-  float k = 6.28318530718 / uWavelength;
-  float w2 = uWidth * uWidth;
+  vec3 baseCol = uHasContent < 0.5 ? vec3(0.0) : page(pUv).rgb;
+  float baseAlpha = uHasContent < 0.5 ? 0.0 : 1.0;
 
-  for (int i = 0; i < 12; i++) {
+  vec3 col = baseCol;
+  float outAlpha = baseAlpha;
+
+  for (int i = 0; i < 6; i++) {
     if (i >= uCount) break;
-    vec4 rp = uRipples[i];
-    vec2 dv = frag - rp.xy;
-    float r = length(dv);
-    float front = uSpeed * rp.z;
-    float s = r - front;
-    float env = exp(-s * s / w2) * exp(-uDecay * rp.z) * rp.w;
-    env *= smoothstep(0.0, 0.08, rp.z);
-    env *= inversesqrt(1.0 + front / max(uWavelength, 1.0) * 0.2);
-    if (env < 0.0015) continue;
-    float dh = (k * cos(s * k) - 2.0 * s / w2 * sin(s * k)) * env;
-    grad += dv / max(r, 1.0) * dh * uWavelength * 0.16;
+    vec4 f = uFish0[i];
+    vec2 center = f.xy;
+    float half_ = max(f.z, 1.0) * 0.5;
+
+    float alpha;
+    vec4 tex = sampleFish(frag, center, half_, uRotation[i], alpha);
+    col = mix(col, tex.rgb, alpha);
+    outAlpha = max(outAlpha, alpha);
   }
 
-  float g = dot(grad, vec2(-0.55, -0.8));
-  float glint = pow(clamp(g * 2.2, 0.0, 1.0), 2.0) * uShine;
-  float shade = pow(clamp(-g * 1.6, 0.0, 1.0), 2.0) * uShine * 0.3;
-
   if (uHasContent < 0.5) {
-    float a = clamp(glint * 0.9 + shade * 0.5, 0.0, 0.85);
-    outColor = vec4(vec3(glint * 0.9), a);
+    outColor = vec4(col, outAlpha);
     return;
   }
 
-  vec2 offs = grad * uRefraction / uResolution;
-  vec3 col;
-  if (uDispersion > 0.001) {
-    float d = uDispersion * 0.35;
-    col = vec3(
-      page(pUv + offs * (1.0 + d)).r,
-      page(pUv + offs).g,
-      page(pUv + offs * (1.0 - d)).b
-    );
-  } else {
-    col = page(pUv + offs).rgb;
-  }
-  col += glint;
-  col *= 1.0 - shade;
   outColor = vec4(col, 1.0);
 }`;
 
@@ -174,10 +152,72 @@ export function supportsHtmlInCanvas(): boolean {
   );
 }
 
-export function createRipple(
-  elements: RippleElements,
-  options: RippleOptions = {},
-): RippleInstance | null {
+interface FishState {
+  centerX: number;
+  centerY: number;
+  radiusX: number;
+  radiusY: number;
+  tilt: number;
+  phase: number;
+  angularSpeed: number;
+  offsetX: number;
+  offsetY: number;
+  velX: number;
+  velY: number;
+  size: number;
+  wigglePhase: number;
+}
+
+function pathPoint(
+  fish: FishState,
+  t: number,
+): { x: number; y: number; angle: number } {
+  const c = Math.cos(fish.tilt);
+  const s = Math.sin(fish.tilt);
+  const ex = Math.cos(t) * fish.radiusX;
+  const ey = Math.sin(t) * fish.radiusY;
+  const x = fish.centerX + ex * c - ey * s;
+  const y = fish.centerY + ex * s + ey * c;
+
+  const dex = -Math.sin(t) * fish.radiusX;
+  const dey = Math.cos(t) * fish.radiusY;
+  const dx = dex * c - dey * s;
+  const dy = dex * s + dey * c;
+  const angle = Math.atan2(dy, dx) + Math.PI / 2;
+
+  return { x, y, angle };
+}
+
+function makeFish(count: number, width: number, height: number): FishState[] {
+  const fish: FishState[] = [];
+  const cx = width / 2;
+  const cy = height / 2;
+  for (let i = 0; i < count; i++) {
+    const spread = 0.3 + Math.random() * 0.4;
+    const angleOffset = (i / count) * Math.PI * 2 + Math.random() * 0.6;
+    fish.push({
+      centerX: cx + Math.cos(angleOffset) * width * 0.15 * (i % 2 === 0 ? 1 : -1),
+      centerY: cy + Math.sin(angleOffset) * height * 0.12,
+      radiusX: width * spread * (0.5 + Math.random() * 0.5),
+      radiusY: height * spread * (0.35 + Math.random() * 0.4),
+      tilt: Math.random() * Math.PI,
+      phase: Math.random() * Math.PI * 2,
+      angularSpeed: (0.15 + Math.random() * 0.1) * (Math.random() < 0.5 ? 1 : -1),
+      offsetX: 0,
+      offsetY: 0,
+      velX: 0,
+      velY: 0,
+      size: 0.8 + Math.random() * 0.4,
+      wigglePhase: Math.random() * Math.PI * 2,
+    });
+  }
+  return fish;
+}
+
+export function createFish(
+  elements: FishElements,
+  options: FishOptions = {},
+): FishInstance | null {
   const config = { ...DEFAULTS, ...options };
   const { source, content, output } = elements;
 
@@ -217,7 +257,7 @@ export function createRipple(
     gl!.shaderSource(shader, text);
     gl!.compileShader(shader);
     if (!gl!.getShaderParameter(shader, gl!.COMPILE_STATUS)) {
-      console.error("Ripple shader error:", gl!.getShaderInfoLog(shader));
+      console.error("Fish shader error:", gl!.getShaderInfoLog(shader));
     }
     return shader;
   }
@@ -230,8 +270,8 @@ export function createRipple(
   gl.linkProgram(program);
 
   const uniforms: Record<string, WebGLUniformLocation> = {};
-  const count = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
-  for (let i = 0; i < count; i++) {
+  const uniformCount = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < uniformCount; i++) {
     const info = gl.getActiveUniform(program, i)!;
     uniforms[info.name.replace("[0]", "")] = gl.getUniformLocation(
       program,
@@ -267,7 +307,64 @@ export function createRipple(
     new Uint8Array([0, 0, 0, 0]),
   );
 
-  let contentMaxX = 1;
+  const fishTexture = gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_2D, fishTexture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    1,
+    1,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    new Uint8Array([0, 0, 0, 0]),
+  );
+
+  let fishReady = false;
+  let fishAspectX = 1;
+  let fishAspectY = 1;
+
+  const fishImage = new Image();
+  fishImage.decoding = "async";
+  fishImage.onload = () => {
+    if (destroyed) return;
+    gl!.bindTexture(gl!.TEXTURE_2D, fishTexture);
+    gl!.texImage2D(
+      gl!.TEXTURE_2D,
+      0,
+      gl!.RGBA,
+      gl!.RGBA,
+      gl!.UNSIGNED_BYTE,
+      fishImage,
+    );
+    const iw = fishImage.naturalWidth || 1;
+    const ih = fishImage.naturalHeight || 1;
+    if (iw >= ih) {
+      fishAspectX = 1;
+      fishAspectY = ih / iw;
+    } else {
+      fishAspectX = iw / ih;
+      fishAspectY = 1;
+    }
+    fishReady = true;
+    start();
+  };
+  fishImage.src = config.src;
+
+  let fish: FishState[] = [];
+  const fishData = new Float32Array(MAX_FISH * 4);
+  const rotationData = new Float32Array(MAX_FISH);
+
+  function rebuildFish() {
+    const w = Math.max(output.clientWidth, 1);
+    const h = Math.max(output.clientHeight, 1);
+    fish = makeFish(Math.min(Math.max(config.count, 1), MAX_FISH), w, h);
+  }
 
   function syncCanvasSize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -276,15 +373,12 @@ export function createRipple(
     if (output.width !== width || output.height !== height) {
       output.width = width;
       output.height = height;
+      rebuildFish();
     }
-    contentMaxX = Math.min(
-      1,
-      Math.max(0.05, content.clientWidth / Math.max(output.clientWidth, 1)),
-    );
     if (htmlInCanvas) {
       const cssWidth = Math.max(1, Math.round(source.clientWidth));
       const cssHeight = Math.max(1, Math.round(source.clientHeight));
-      if (source.width !== cssWidth * dpr|| source.height !== cssHeight * dpr) {
+      if (source.width !== cssWidth * dpr || source.height !== cssHeight * dpr) {
         source.width = cssWidth * dpr;
         source.height = cssHeight * dpr;
       }
@@ -292,15 +386,22 @@ export function createRipple(
     }
   }
 
+  rebuildFish();
   syncCanvasSize();
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, output.width, output.height);
   gl.clearColor(0, 0, 0, 0);
   gl.clear(gl.COLOR_BUFFER_BIT);
 
+  let contentMaxX = 1;
+
   function uploadContent() {
     if (!htmlInCanvas || !contentDirty) return;
     contentDirty = false;
+    contentMaxX = Math.min(
+      1,
+      Math.max(0.05, content.clientWidth / Math.max(output.clientWidth, 1)),
+    );
     gl!.bindTexture(gl!.TEXTURE_2D, contentTexture);
     gl!.texImage2D(
       gl!.TEXTURE_2D,
@@ -312,58 +413,67 @@ export function createRipple(
     );
   }
 
-  type Wave = { x: number; y: number; age: number; amp: number };
-  const ripples: Wave[] = [];
-  const rippleData = new Float32Array(MAX_RIPPLES * 4);
+  const OFFSET_STIFFNESS = 40;
+  const OFFSET_DAMPING = 8;
+  const REST_THRESHOLD_SQ = 0.02;
 
-  function splash(x: number, y: number, strength = 1) {
-    if (reducedMotion) return;
-    if (ripples.length >= MAX_RIPPLES) ripples.shift();
-    ripples.push({ x, y, age: 0, amp: strength });
-    start();
-  }
+  function step(delta: number): void {
+    for (const f of fish) {
+      const ax = -f.offsetX * OFFSET_STIFFNESS - f.velX * OFFSET_DAMPING;
+      const ay = -f.offsetY * OFFSET_STIFFNESS - f.velY * OFFSET_DAMPING;
+      f.velX += ax * delta;
+      f.velY += ay * delta;
+      f.offsetX += f.velX * delta;
+      f.offsetY += f.velY * delta;
 
-  function pruneRipples(delta: number) {
-    const diag = Math.hypot(output.clientWidth, output.clientHeight);
-    const speedPx = BASE_SPEED * Math.max(config.speed, 0.05);
-    const width = config.wavelength * Math.max(config.rings, 1) * 0.5;
-    for (let i = ripples.length - 1; i >= 0; i--) {
-      const rp = ripples[i];
-      rp.age += delta;
-      const gone =
-        rp.age * speedPx > diag + width * 3 ||
-        Math.exp(-Math.max(config.decay, 0.05) * rp.age) * rp.amp < 0.012;
-      if (gone) ripples.splice(i, 1);
+      if (
+        f.velX * f.velX + f.velY * f.velY < REST_THRESHOLD_SQ &&
+        f.offsetX * f.offsetX + f.offsetY * f.offsetY < REST_THRESHOLD_SQ
+      ) {
+        f.offsetX = 0;
+        f.offsetY = 0;
+        f.velX = 0;
+        f.velY = 0;
+      }
     }
   }
 
-  function render() {
+  function render(elapsed: number) {
     uploadContent();
     const dpr = output.width / Math.max(output.clientWidth, 1);
+    const w = Math.max(output.clientWidth, 1);
+    const h = Math.max(output.clientHeight, 1);
+    const baseSize = Math.min(w, h) * Math.max(config.scale, 0.02);
+    const flex = Math.max(config.flex, 0);
+
+    const count = Math.min(fish.length, MAX_FISH);
+    for (let i = 0; i < count; i++) {
+      const f = fish[i];
+      const t = elapsed * f.angularSpeed + f.phase;
+      const point = pathPoint(f, t);
+      const swimSpeed = 6 + Math.abs(f.angularSpeed) * 10;
+
+      const pulse =
+        1 + Math.sin(elapsed * swimSpeed + f.wigglePhase) * flex * 0.12;
+
+      fishData[i * 4] = (point.x + f.offsetX) * dpr;
+      fishData[i * 4 + 1] = (point.y + f.offsetY) * dpr;
+      fishData[i * 4 + 2] = baseSize * f.size * pulse * dpr;
+      fishData[i * 4 + 3] = 1;
+      rotationData[i] = point.angle;
+    }
+
     gl!.useProgram(program);
     gl!.activeTexture(gl!.TEXTURE0);
     gl!.bindTexture(gl!.TEXTURE_2D, contentTexture);
     gl!.uniform1i(uniforms.uContent, 0);
+    gl!.activeTexture(gl!.TEXTURE1);
+    gl!.bindTexture(gl!.TEXTURE_2D, fishTexture);
+    gl!.uniform1i(uniforms.uFish, 1);
     gl!.uniform2f(uniforms.uResolution, output.width, output.height);
-    for (let i = 0; i < MAX_RIPPLES; i++) {
-      const rp = ripples[i];
-      rippleData[i * 4] = rp ? rp.x * dpr : 0;
-      rippleData[i * 4 + 1] = rp ? rp.y * dpr : 0;
-      rippleData[i * 4 + 2] = rp ? rp.age : 0;
-      rippleData[i * 4 + 3] = rp ? rp.amp * Math.max(config.amplitude, 0) : 0;
-    }
-    gl!.uniform4fv(uniforms.uRipples, rippleData);
-    gl!.uniform1i(uniforms.uCount, ripples.length);
-    gl!.uniform1f(uniforms.uSpeed, BASE_SPEED * Math.max(config.speed, 0.05) * dpr);
-    gl!.uniform1f(uniforms.uWavelength, Math.max(config.wavelength, 4) * dpr);
-    gl!.uniform1f(
-      uniforms.uWidth,
-      Math.max(config.wavelength, 4) * Math.max(config.rings, 1) * 0.5 * dpr,
-    );
-    gl!.uniform1f(uniforms.uDecay, Math.max(config.decay, 0.05));
-    gl!.uniform1f(uniforms.uRefraction, Math.max(config.refraction, 0) * dpr);
-    gl!.uniform1f(uniforms.uDispersion, Math.max(config.dispersion, 0));
-    gl!.uniform1f(uniforms.uShine, Math.max(config.shine, 0));
+    gl!.uniform4fv(uniforms.uFish0, fishData);
+    gl!.uniform1fv(uniforms.uRotation, rotationData);
+    gl!.uniform1i(uniforms.uCount, fishReady ? count : 0);
     gl!.uniform1f(uniforms.uHasContent, htmlInCanvas ? 1 : 0);
     gl!.uniform1f(uniforms.uMaxX, contentMaxX);
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
@@ -371,37 +481,36 @@ export function createRipple(
     gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
   }
 
-  function renderIdle() {
-    gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
-    gl!.viewport(0, 0, output.width, output.height);
-    if (htmlInCanvas) {
-      render();
-    } else {
-      gl!.clearColor(0, 0, 0, 0);
-      gl!.clear(gl!.COLOR_BUFFER_BIT);
+  function push(x: number, y: number, strength = 1) {
+    if (reducedMotion) return;
+    const radius = Math.max(config.pushRadius, 1);
+    const elapsed = (performance.now() - startTime) / 1000;
+    for (const f of fish) {
+      const t = elapsed * f.angularSpeed + f.phase;
+      const point = pathPoint(f, t);
+      const px = point.x + f.offsetX;
+      const py = point.y + f.offsetY;
+      const dx = px - x;
+      const dy = py - y;
+      const dist = Math.hypot(dx, dy);
+      if (dist > radius || dist < 0.001) continue;
+      const falloff = 1 - dist / radius;
+      const force = falloff * falloff * config.pushStrength * strength * 220;
+      f.velX += (dx / dist) * force;
+      f.velY += (dy / dist) * force;
     }
+    start();
   }
 
   let raf = 0;
-  let lastTime = performance.now();
+  let startTime = performance.now();
+  let lastTime = startTime;
   let destroyed = false;
   let running = false;
   let visible = true;
-  let ambientTimer = 0;
 
   const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
   let reducedMotion = motionQuery.matches;
-
-  function spawnAmbient() {
-    const w = output.clientWidth;
-    const h = output.clientHeight;
-    if (w < 10 || h < 10) return;
-    splash(
-      w * (0.15 + Math.random() * 0.7),
-      h * (0.15 + Math.random() * 0.7),
-      0.6 + Math.random() * 0.5,
-    );
-  }
 
   function frame(now: number) {
     if (destroyed) return;
@@ -411,25 +520,14 @@ export function createRipple(
     }
     const delta = Math.min(Math.max((now - lastTime) / 1000, 0), 1 / 30);
     lastTime = now;
-    if (!reducedMotion) {
-      pruneRipples(delta);
-      if (config.interval > 0) {
-        ambientTimer += delta;
-        if (ambientTimer >= config.interval) {
-          ambientTimer = 0;
-          spawnAmbient();
-        }
-      }
+    const elapsed = (now - startTime) / 1000;
+    if (reducedMotion) {
+      render(elapsed);
+      running = false;
+      return;
     }
-    if (ripples.length > 0) {
-      render();
-    } else {
-      renderIdle();
-      if (!contentDirty && (config.interval <= 0 || reducedMotion)) {
-        running = false;
-        return;
-      }
-    }
+    step(delta);
+    render(elapsed);
     raf = requestAnimationFrame(frame);
   }
 
@@ -450,30 +548,23 @@ export function createRipple(
     return [event.clientX - rect.left, event.clientY - rect.top];
   }
 
-  let hoverX = -1e5;
-  let hoverY = -1e5;
-
   function onPointerDown(event: PointerEvent) {
-    if (config.trigger === "none") return;
     const [x, y] = localPoint(event);
-    splash(x, y, 1);
-  }
-
-  function onPointerMove(event: PointerEvent) {
-    if (config.trigger !== "hover") return;
-    const [x, y] = localPoint(event);
-    if (Math.hypot(x - hoverX, y - hoverY) < 56) return;
-    hoverX = x;
-    hoverY = y;
-    splash(x, y, 0.3);
+    push(x, y, 1);
   }
 
   content.addEventListener("pointerdown", onPointerDown, { passive: true });
-  content.addEventListener("pointermove", onPointerMove, { passive: true });
 
   function onMotionChange() {
     reducedMotion = motionQuery.matches;
-    if (reducedMotion) ripples.length = 0;
+    if (reducedMotion) {
+      for (const f of fish) {
+        f.offsetX = 0;
+        f.offsetY = 0;
+        f.velX = 0;
+        f.velY = 0;
+      }
+    }
     start();
   }
   motionQuery.addEventListener("change", onMotionChange);
@@ -495,14 +586,22 @@ export function createRipple(
     setOptions(next) {
       if (
         !Object.entries(next).some(
-          ([key, value]) => config[key as keyof RippleOptions] !== value,
+          ([key, value]) => config[key as keyof FishOptions] !== value,
         )
       )
         return;
+      const countChanged =
+        next.count !== undefined && next.count !== config.count;
+      const srcChanged = next.src !== undefined && next.src !== config.src;
       Object.assign(config, next);
+      if (countChanged) rebuildFish();
+      if (srcChanged) {
+        fishReady = false;
+        fishImage.src = config.src;
+      }
       start();
     },
-    splash,
+    push,
     resize() {
       syncCanvasSize();
       start();
@@ -511,8 +610,8 @@ export function createRipple(
       destroyed = true;
       cancelAnimationFrame(raf);
       rectCache.destroy();
+      fishImage.onload = null;
       content.removeEventListener("pointerdown", onPointerDown);
-      content.removeEventListener("pointermove", onPointerMove);
       observer.disconnect();
       intersection.disconnect();
       motionQuery.removeEventListener("change", onMotionChange);
@@ -521,6 +620,7 @@ export function createRipple(
       gl!.clearColor(0, 0, 0, 0);
       gl!.clear(gl!.COLOR_BUFFER_BIT);
       gl!.deleteTexture(contentTexture);
+      gl!.deleteTexture(fishTexture);
       gl!.deleteProgram(program);
       gl!.deleteShader(vertexShader);
       gl!.deleteShader(fragmentShader);
@@ -530,7 +630,7 @@ export function createRipple(
   };
 }
 
-export interface RippleProps extends RippleOptions {
+export interface FishProps extends FishOptions {
   children: ReactNode;
   className?: string;
   style?: React.CSSProperties;
@@ -538,11 +638,11 @@ export interface RippleProps extends RippleOptions {
 
 const emptySubscribe = () => () => {};
 
-export function Ripple({ children, className, style, ...options }: RippleProps) {
+export function Fish({ children, className, style, ...options }: FishProps) {
   const sourceRef = useRef<HTMLCanvasElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const outputRef = useRef<HTMLCanvasElement>(null);
-  const instanceRef = useRef<RippleInstance | null>(null);
+  const instanceRef = useRef<FishInstance | null>(null);
   const [initialOptions] = useState(options);
   const [failed, setFailed] = useState(false);
 
@@ -558,7 +658,7 @@ export function Ripple({ children, className, style, ...options }: RippleProps) 
     const content = contentRef.current;
     const output = outputRef.current;
     if (!source || !content || !output) return;
-    instanceRef.current = createRipple(
+    instanceRef.current = createFish(
       { source, content, output },
       initialOptions,
     );
@@ -627,5 +727,4 @@ export function Ripple({ children, className, style, ...options }: RippleProps) 
   );
 }
 
-
-export default Ripple;
+export default Fish;
