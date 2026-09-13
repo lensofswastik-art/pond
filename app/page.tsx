@@ -6,8 +6,15 @@ import FishTrail from "@/components/FishTrail";
 
 export default function Home() {
   return (
-    <Flowers className="flex flex-1 items-center justify-center bg-cover bg-center font-sans">
-      <Lotus className="flex h-full w-full items-center justify-center">
+    <Flowers
+      className="flex flex-1 items-center justify-center bg-cover bg-center font-sans"
+      count={13}
+    >
+      <Lotus
+        className="flex h-full w-full items-center justify-center"
+        count={11}
+        scale={0.06}
+      >
         <Lotus
           className="flex h-full w-full items-center justify-center"
           sources={["/lotus.png"]}

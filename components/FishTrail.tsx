@@ -27,7 +27,7 @@ export function FishTrail({ className }: { className?: string }) {
           position: "absolute",
           top: "50%",
           left: "50%",
-          transform: "translate(-50%, -50%)",
+          transform: "translate(-50%, -50%) scaleX(-1)",
           width: "38%",
           aspectRatio: "1 / 1",
           objectFit: "contain",
