@@ -13,6 +13,12 @@
 # testing
 /coverage
 
+# playwright / testing screenshots (generated verification artifacts)
+/.playwright-mcp/
+/*.png
+/*.jpg
+/*.jpeg
+
 # next.js
 /.next/
 /out/

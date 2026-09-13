@@ -291,6 +291,10 @@ export function createRipple(
   }
 
   syncCanvasSize();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, output.width, output.height);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
 
   function uploadContent() {
     if (!htmlInCanvas || !contentDirty) return;
@@ -507,6 +511,10 @@ export function createRipple(
       observer.disconnect();
       intersection.disconnect();
       motionQuery.removeEventListener("change", onMotionChange);
+      gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
+      gl!.viewport(0, 0, output.width, output.height);
+      gl!.clearColor(0, 0, 0, 0);
+      gl!.clear(gl!.COLOR_BUFFER_BIT);
       gl!.deleteTexture(contentTexture);
       gl!.deleteProgram(program);
       gl!.deleteShader(vertexShader);
@@ -591,9 +599,8 @@ export function Ripple({ children, className, style, ...options }: RippleProps) 
         <div
           ref={contentRef}
           style={{
-            position: "relative",
-            width: "100%",
-            height: "100%",
+            position: "absolute",
+            inset: 0,
             overflow: "auto",
           }}
         >

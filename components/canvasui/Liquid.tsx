@@ -595,6 +595,10 @@ export function createLiquid(
   }
 
   syncCanvasSize();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, output.width, output.height);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
 
   const contentTexture = gl.createTexture()!;
   gl.bindTexture(gl.TEXTURE_2D, contentTexture);
@@ -968,6 +972,10 @@ export function createLiquid(
       observer.disconnect();
       intersection.disconnect();
       motionQuery.removeEventListener("change", onMotionChange);
+      gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
+      gl!.viewport(0, 0, output.width, output.height);
+      gl!.clearColor(0, 0, 0, 0);
+      gl!.clear(gl!.COLOR_BUFFER_BIT);
       releaseTargets(fluidTargets);
       gl!.deleteTexture(contentTexture);
       programs.forEach((program) => gl!.deleteProgram(program));
@@ -1077,9 +1085,8 @@ export function Liquid({
         <div
           ref={contentRef}
           style={{
-            position: "relative",
-            width: "100%",
-            height: "100%",
+            position: "absolute",
+            inset: 0,
             overflow: "auto",
           }}
         >
