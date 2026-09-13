@@ -4,7 +4,7 @@ export default function Home() {
   return (
     <Ripple
       className="flex flex-1 items-center justify-center font-sans"
-      style={{ backgroundColor: "#00A6FB" }}
+      style={{ backgroundColor: "#3083BC" }}
       trigger="click"
     >
       <main className="flex h-full w-full items-center justify-center">

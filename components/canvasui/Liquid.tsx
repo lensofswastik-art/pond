@@ -345,7 +345,7 @@ export function createLiquid(
     depth: false,
     stencil: false,
     antialias: false,
-    premultipliedAlpha: true,
+    premultipliedAlpha: false,
   });
   if (!gl || gl.isContextLost()) return null;
 
